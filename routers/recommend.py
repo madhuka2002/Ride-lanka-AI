@@ -1,7 +1,14 @@
 import os
 from fastapi import APIRouter, HTTPException, Header
-from models.schemas import RecommendationRequest, RecommendationResponse, RecommendedPlace
-from services.gemini_service import get_recommendations
+from models.schemas import (
+    RecommendationRequest,
+    RecommendationResponse,
+    RecommendedPlace,
+    TripPlanRequest,
+    TripPlanResponse,
+    TripStop,
+)
+from services.gemini_service import get_recommendations, get_trip_plan
 from services.places_service import enrich_places
 
 router = APIRouter()
@@ -38,4 +45,39 @@ async def recommend(
         user_id=payload.user_id,
         recommendations=recommended,
         source=source,
+    )
+
+
+@router.post("/trip-plan", response_model=TripPlanResponse)
+async def trip_plan(
+    payload: TripPlanRequest,
+    x_backend_secret: str | None = Header(default=None),
+):
+    _verify_secret(x_backend_secret)
+
+    if payload.stop_count < 1 or payload.stop_count > 10:
+        raise HTTPException(status_code=400, detail="stop_count must be between 1 and 10")
+
+    behavior_dicts = [e.model_dump() for e in payload.behavior_queue]
+
+    raw_stops, source = get_trip_plan(
+        trip_name=payload.trip_name,
+        trip_date=payload.trip_date,
+        stop_count=payload.stop_count,
+        favorites=payload.favorites,
+        profile_interests=payload.profile_interests,
+        behavior_queue=behavior_dicts,
+    )
+
+    enriched = enrich_places(raw_stops)
+    planned_stops = [TripStop(**s) for s in enriched]
+
+    return TripPlanResponse(
+        user_id=payload.user_id,
+        trip_name=payload.trip_name,
+        trip_date=payload.trip_date,
+        stop_count=payload.stop_count,
+        favorites=payload.favorites,
+        source=source,
+        stops=planned_stops,
     )
