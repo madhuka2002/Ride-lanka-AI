@@ -55,8 +55,8 @@ async def trip_plan(
 ):
     _verify_secret(x_backend_secret)
 
-    if payload.stop_count < 1 or payload.stop_count > 10:
-        raise HTTPException(status_code=400, detail="stop_count must be between 1 and 10")
+    if payload.stop_count < 1 or payload.stop_count > 20:
+        raise HTTPException(status_code=400, detail="stop_count must be between 1 and 20")
 
     behavior_dicts = [e.model_dump() for e in payload.behavior_queue]
 
