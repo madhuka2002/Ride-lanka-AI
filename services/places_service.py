@@ -1,5 +1,5 @@
 import os
-import httpx
+import httpx  # type: ignore
 from typing import List, Dict, Any, Optional
 
 _MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
@@ -30,10 +30,13 @@ def enrich_places(places: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         print("[places_service] No GOOGLE_MAPS_API_KEY — skipping enrichment")
         return places
 
+    import time
+
     enriched = []
     with httpx.Client(timeout=10) as client:
         for place in places:
             try:
+                time.sleep(0.15)  # Pause to avoid FREE TIER OVER_QUERY_LIMIT
                 resp = client.get(
                     _PLACES_TEXT_SEARCH,
                     params={
