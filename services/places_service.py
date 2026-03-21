@@ -75,3 +75,57 @@ def enrich_places(places: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             enriched.append(place)
 
     return enriched
+
+def search_single_place(query: str) -> Dict[str, Any]:
+    """Search for a single place by name and return its formatted stop dict."""
+    import time
+    
+    stop_data = {
+        "name": query,
+        "description": "Custom added stop",
+        "category": "general",
+        "search_query": f"{query} Sri Lanka",
+        "lat": None,
+        "lng": None,
+        "place_id": None,
+        "photo_url": None,
+        "rating": None,
+        "maps_url": None
+    }
+    
+    if not _MAPS_API_KEY:
+        return stop_data
+
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(
+                _PLACES_TEXT_SEARCH,
+                params={
+                    "query": f"{query} Sri Lanka",
+                    "key": _MAPS_API_KEY,
+                    "region": "lk",
+                },
+            )
+            data = resp.json()
+            results = data.get("results", [])
+
+            if results:
+                top = results[0]
+                place_id = top.get("place_id")
+                geometry = top.get("geometry", {}).get("location", {})
+                photos = top.get("photos", [])
+                
+                stop_data["name"] = top.get("name") or query
+                stop_data["place_id"] = place_id
+                stop_data["lat"] = geometry.get("lat")
+                stop_data["lng"] = geometry.get("lng")
+                stop_data["rating"] = top.get("rating")
+                
+                if photos:
+                    stop_data["photo_url"] = _get_photo_url(photos[0]["photo_reference"])
+                if place_id:
+                    stop_data["maps_url"] = f"https://www.google.com/maps/place/?q=place_id:{place_id}"
+    except Exception as e:
+        print(f"[places_service] Error searching '{query}': {e}")
+        
+    return stop_data

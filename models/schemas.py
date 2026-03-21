@@ -79,3 +79,6 @@ class CultureResponse(BaseModel):
     best_season: str
     historical_context: str
     source: str
+
+class PlaceSearchRequest(BaseModel):
+    query: str

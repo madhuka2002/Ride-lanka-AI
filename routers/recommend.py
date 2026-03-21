@@ -9,9 +9,10 @@ from models.schemas import (
     TripStop,
     CultureRequest,
     CultureResponse,
+    PlaceSearchRequest,
 )
 from services.gemini_service import get_recommendations, get_trip_plan, get_place_culture
-from services.places_service import enrich_places
+from services.places_service import enrich_places, search_single_place
 
 router = APIRouter()
 
@@ -102,3 +103,15 @@ async def culture_info(
         historical_context=data.get("historical_context", ""),
         source=source
     )
+
+@router.post("/search-place", response_model=TripStop)
+async def search_place(
+    payload: PlaceSearchRequest,
+    x_backend_secret: str | None = Header(default=None),
+):
+    _verify_secret(x_backend_secret)
+    
+    place_dict = search_single_place(payload.query)
+    place_dict["stop_order"] = 999
+    
+    return TripStop(**place_dict)
