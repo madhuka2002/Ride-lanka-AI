@@ -9,9 +9,11 @@ from models.schemas import (
     TripStop,
     CultureRequest,
     CultureResponse,
+    PlaceSearchRequest,
+    ReorderRequest,
 )
-from services.gemini_service import get_recommendations, get_trip_plan, get_place_culture
-from services.places_service import enrich_places
+from services.gemini_service import get_recommendations, get_trip_plan, get_place_culture, reorder_trip_plan
+from services.places_service import enrich_places, search_single_place
 
 router = APIRouter()
 
@@ -69,6 +71,7 @@ async def trip_plan(
         favorites=payload.favorites,
         profile_interests=payload.profile_interests,
         behavior_queue=behavior_dicts,
+        route_preference=payload.route_preference,
     )
 
     enriched = enrich_places(raw_stops)
@@ -102,3 +105,33 @@ async def culture_info(
         historical_context=data.get("historical_context", ""),
         source=source
     )
+
+@router.post("/reorder", response_model=TripPlanResponse)
+async def reorder_stops(
+    payload: ReorderRequest,
+    x_backend_secret: str | None = Header(default=None),
+):
+    _verify_secret(x_backend_secret)
+    reordered, source = reorder_trip_plan(payload.stops, payload.route_preference)
+    planned_stops = [TripStop(**s) for s in reordered]
+    return TripPlanResponse(
+        user_id=payload.user_id,
+        trip_name="Reordered",
+        trip_date="N/A",
+        stop_count=len(planned_stops),
+        favorites=[],
+        source=source,
+        stops=planned_stops,
+    )
+
+@router.post("/search-place", response_model=TripStop)
+async def search_place(
+    payload: PlaceSearchRequest,
+    x_backend_secret: str | None = Header(default=None),
+):
+    _verify_secret(x_backend_secret)
+    
+    place_dict = search_single_place(payload.query)
+    place_dict["stop_order"] = 999
+    
+    return TripStop(**place_dict)

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 
 class BehaviorEvent(BaseModel):
@@ -37,8 +37,9 @@ class TripPlanRequest(BaseModel):
     user_id: str
     trip_name: str
     trip_date: str
-    stop_count: int
-    favorites: List[str] = Field(default_factory=list)
+    stop_count: int = 5
+    favorites: List[str] = []
+    route_preference: str = "shortest"
     profile_interests: List[str] = Field(default_factory=list)
     behavior_queue: List[BehaviorEvent] = Field(default_factory=list)
 
@@ -79,3 +80,11 @@ class CultureResponse(BaseModel):
     best_season: str
     historical_context: str
     source: str
+
+class PlaceSearchRequest(BaseModel):
+    query: str
+
+class ReorderRequest(BaseModel):
+    user_id: str
+    stops: List[Dict[str, Any]]
+    route_preference: str = "shortest"
