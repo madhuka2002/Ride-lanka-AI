@@ -2,6 +2,8 @@ import os
 import json
 import re
 import time
+import random
+import math
 import google.generativeai as genai  # type: ignore
 from typing import List, Dict, Any
 
@@ -43,6 +45,7 @@ _FALLBACK_TRIP_STOPS: List[Dict[str, Any]] = [
         "category": "culture",
         "search_query": "Colombo Fort Sri Lanka",
         "stop_note": "Start in Colombo for museums and city food trails",
+        "lat": 6.9344, "lng": 79.8468 # Example coordinates
     },
     {
         "name": "Kandy Lake",
@@ -50,6 +53,7 @@ _FALLBACK_TRIP_STOPS: List[Dict[str, Any]] = [
         "category": "culture",
         "search_query": "Kandy Lake Sri Lanka",
         "stop_note": "Explore temple district and evening cultural show",
+        "lat": 7.2906, "lng": 80.6337 # Example coordinates
     },
     {
         "name": "Ella Rock",
@@ -57,6 +61,7 @@ _FALLBACK_TRIP_STOPS: List[Dict[str, Any]] = [
         "category": "hiking",
         "search_query": "Ella Rock Sri Lanka",
         "stop_note": "Sunrise hike and tea estate viewpoints",
+        "lat": 6.8667, "lng": 81.0469 # Example coordinates
     },
     {
         "name": "Yala National Park",
@@ -64,6 +69,7 @@ _FALLBACK_TRIP_STOPS: List[Dict[str, Any]] = [
         "category": "wildlife",
         "search_query": "Yala National Park Sri Lanka",
         "stop_note": "Book early-morning jeep safari",
+        "lat": 6.3500, "lng": 81.5000 # Example coordinates
     },
     {
         "name": "Mirissa Beach",
@@ -71,6 +77,7 @@ _FALLBACK_TRIP_STOPS: List[Dict[str, Any]] = [
         "category": "beach",
         "search_query": "Mirissa Beach Sri Lanka",
         "stop_note": "End trip with sunset beach time",
+        "lat": 5.9485, "lng": 80.4670 # Example coordinates
     },
 ]
 
@@ -117,6 +124,7 @@ def _build_trip_plan_prompt(
     favorites: List[str],
     profile_interests: List[str],
     behavior_queue: List[Dict[str, Any]],
+    route_preference: str = "shortest",
 ) -> str:
     favorites_str = ", ".join(favorites) if favorites else "general travel"
     profile_interests_str = ", ".join(profile_interests) if profile_interests else "none"
@@ -131,6 +139,14 @@ def _build_trip_plan_prompt(
     else:
         behavior_section = "No prior behavior events available."
 
+    algorithm_rules = ""
+    if route_preference == "safest":
+        algorithm_rules = "- Route Algorithm: Optimize for the 'safest path'. Prioritize major well-lit highways, popular tourist corridors, and populated safe areas. Avoid obscure backroads."
+    elif route_preference == "max_places":
+        algorithm_rules = "- Route Algorithm: Optimize for 'maximum places covering path'. Trace a main travel corridor and pack as many dense, high-quality attractions as possible within a strict 1km radius of the main driving path (i.e. cluster stops tightly along the core route to minimize detours)."
+    else:
+        algorithm_rules = "- Route Algorithm: Optimize for 'shortest path'. Order the stops strictly by geographic proximity to minimize total driving time and backtracking (solve the TSP efficiently)."
+
     return f"""You are an expert Sri Lanka trip planner.
 
 Create a realistic trip route for this request:
@@ -143,6 +159,7 @@ Create a realistic trip route for this request:
 
 Rules:
 - Return exactly {stop_count} stops in Sri Lanka.
+{algorithm_rules}
 - Prioritize the user's favorites first, then profile interests, then behavior patterns.
 - Balance geography and travel flow to avoid unrealistic zig-zag routes.
 - Keep each description concise (max 100 characters).
@@ -207,6 +224,7 @@ def get_trip_plan(
     favorites: List[str],
     profile_interests: List[str],
     behavior_queue: List[Dict[str, Any]],
+    route_preference: str = "shortest",
 ) -> tuple[List[Dict[str, Any]], str]:
     """
     Returns (list_of_stop_dicts, source) where source is 'gemini' or 'fallback'.
@@ -218,6 +236,7 @@ def get_trip_plan(
         favorites=favorites,
         profile_interests=profile_interests,
         behavior_queue=behavior_queue,
+        route_preference=route_preference,
     )
 
     for attempt in range(3):
@@ -241,6 +260,8 @@ def get_trip_plan(
                         "category": stop.get("category", "general"),
                         "search_query": stop.get("search_query") or f"{stop.get('name', 'Sri Lanka')} Sri Lanka",
                         "stop_note": stop.get("stop_note", ""),
+                        "lat": stop.get("lat"), # Include lat/lng if present
+                        "lng": stop.get("lng"),
                     })
 
                 if len(normalized) < stop_count:
@@ -254,19 +275,102 @@ def get_trip_plan(
             err_str = str(e)
             print(f"[gemini_service] Trip-plan Gemini error (attempt {attempt + 1}): {err_str[:200]}")  # type: ignore
             if "429" in err_str and attempt < 2:
-                wait = 15 * (attempt + 1)
-                print(f"[gemini_service] Rate limited (trip-plan) - waiting {wait}s before retry")
-                time.sleep(wait)
+                time.sleep(15 * (attempt + 1))
                 continue
             break
 
     fallback_stops = []
-    for idx in range(1, stop_count + 1):
-        stop = _FALLBACK_TRIP_STOPS[(idx - 1) % len(_FALLBACK_TRIP_STOPS)].copy()
-        stop["stop_order"] = idx
+    for idx in range(stop_count):
+        stop = _FALLBACK_TRIP_STOPS[idx % len(_FALLBACK_TRIP_STOPS)].copy()
         fallback_stops.append(stop)
 
+    if route_preference == "shortest":
+        fallback_stops = __nearest_neighbor_sort(fallback_stops)
+    else:
+        for idx, s in enumerate(fallback_stops, start=1):
+            s["stop_order"] = idx
     return fallback_stops, "fallback"
+
+
+def __nearest_neighbor_sort(stops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not stops: return []
+    valid_stops = [s for s in stops if s.get('lat') is not None and s.get('lng') is not None]
+    if len(valid_stops) != len(stops):
+        # Fallback to simple index sort if missing coordinates
+        for idx, s in enumerate(stops, start=1):
+            s["stop_order"] = idx
+        return stops
+
+    unvisited = valid_stops.copy()
+    current = unvisited.pop(0)
+    sorted_stops = [current]
+    
+    while unvisited:
+        nearest = min(unvisited, key=lambda s: math.hypot(s['lat'] - current['lat'], s['lng'] - current['lng']))
+        sorted_stops.append(nearest)
+        unvisited.remove(nearest)
+        current = nearest
+        
+    for idx, s in enumerate(sorted_stops, start=1):
+        s["stop_order"] = idx
+    return sorted_stops
+
+
+def reorder_trip_plan(stops: List[Dict[str, Any]], route_preference: str) -> tuple[List[Dict[str, Any]], str]:
+    if not stops:
+        return [], "fallback"
+
+    algorithm_rules = ""
+    if route_preference == "safest":
+        algorithm_rules = "Optimize for the 'safest path'. Prioritize major well-lit highways and popular corridors. Avoid obscure backroads."
+    elif route_preference == "max_places":
+        algorithm_rules = "Optimize for 'maximum places covering path'. Trace a main travel corridor and cluster stops tightly along the core route."
+    else:
+        algorithm_rules = "Optimize for 'shortest path'. Order the stops strictly by geographic proximity to minimize total driving time and backtracking."
+
+    # Send stripped-down stops to save tokens
+    simplified = [{"id": s.get("name"), "category": s.get("category")} for s in stops]
+
+    prompt = f"""You are a geospatial algorithm optimizing a Sri Lanka trip.
+I have a list of these exact places:
+{json.dumps(simplified)}
+
+Re-order these exact places based on this rule:
+- {algorithm_rules}
+
+Rules:
+- DO NOT add or remove any places. You must return the exact same places provided in the input.
+- Return ONLY a valid JSON array containing EXACTLY the original "id" strings. Do not invent new places.
+Example output: ["Place C", "Place A", "Place B"]
+"""
+    for attempt in range(3):
+        try:
+            response = _model.generate_content(prompt)
+            raw = response.text.strip()
+            
+            start_idx = raw.find('[')
+            end_idx = raw.rfind(']') + 1
+            if start_idx != -1 and end_idx != 0:
+                raw = raw[start_idx:end_idx]
+
+            ordered_names = json.loads(raw)
+            if isinstance(ordered_names, list) and len(ordered_names) == len(stops):
+                new_stops = []
+                stop_map = {s.get("name"): s for s in stops}
+                for idx, name in enumerate(ordered_names, start=1):
+                    original_stop = stop_map.get(name) or stops[idx - 1]
+                    updated = original_stop.copy()
+                    updated["stop_order"] = idx
+                    new_stops.append(updated)
+                return new_stops, "gemini"
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                time.sleep(15 * (attempt + 1))
+                continue
+            break
+
+    # Fallback to local python geometric math if AI quota exhausted globally
+    return __nearest_neighbor_sort(stops), "fallback"
 
 
 def get_place_culture(place_name: str) -> tuple[Dict[str, Any], str]:
