@@ -66,3 +66,16 @@ class TripPlanResponse(BaseModel):
     favorites: List[str]
     source: str
     stops: List[TripStop]
+
+
+class CultureRequest(BaseModel):
+    place_name: str
+
+
+class CultureResponse(BaseModel):
+    place_name: str
+    dress_code: str
+    behavior_rules: str
+    best_season: str
+    historical_context: str
+    source: str

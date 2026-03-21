@@ -1,5 +1,5 @@
 import os
-import httpx
+import httpx  # type: ignore
 from typing import List, Dict, Any, Optional
 
 _MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")

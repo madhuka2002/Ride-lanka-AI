@@ -7,8 +7,10 @@ from models.schemas import (
     TripPlanRequest,
     TripPlanResponse,
     TripStop,
+    CultureRequest,
+    CultureResponse,
 )
-from services.gemini_service import get_recommendations, get_trip_plan
+from services.gemini_service import get_recommendations, get_trip_plan, get_place_culture
 from services.places_service import enrich_places
 
 router = APIRouter()
@@ -80,4 +82,23 @@ async def trip_plan(
         favorites=payload.favorites,
         source=source,
         stops=planned_stops,
+    )
+
+
+@router.post("/culture-info", response_model=CultureResponse)
+async def culture_info(
+    payload: CultureRequest,
+    x_backend_secret: str | None = Header(default=None),
+):
+    _verify_secret(x_backend_secret)
+    
+    data, source = get_place_culture(payload.place_name)
+    
+    return CultureResponse(
+        place_name=payload.place_name,
+        dress_code=data.get("dress_code", ""),
+        behavior_rules=data.get("behavior_rules", ""),
+        best_season=data.get("best_season", ""),
+        historical_context=data.get("historical_context", ""),
+        source=source
     )
