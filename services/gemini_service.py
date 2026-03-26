@@ -6,6 +6,7 @@ import random
 import math
 import google.generativeai as genai  # type: ignore
 from typing import List, Dict, Any
+from services.fallback_data import FALLBACK_PLACES  # type: ignore
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
@@ -15,72 +16,18 @@ _model = genai.GenerativeModel(
     generation_config={"temperature": 0.9}
 )
 
-# Known Sri Lanka fallback places in case Gemini is unavailable
-_FALLBACK_PLACES: List[Dict[str, Any]] = [
-    {"name": "Sigiriya Rock Fortress", "description": "Ancient rock fortress with frescoes and panoramic views", "category": "culture", "search_query": "Sigiriya Rock Fortress Sri Lanka"},
-    {"name": "Temple of the Tooth Kandy", "description": "Sacred Buddhist temple housing the tooth relic of Buddha", "category": "culture", "search_query": "Temple of the Tooth Relic Kandy Sri Lanka"},
-    {"name": "Yala National Park", "description": "Premier wildlife sanctuary with leopards and elephants", "category": "wildlife", "search_query": "Yala National Park Sri Lanka"},
-    {"name": "Mirissa Beach", "description": "Stunning crescent beach perfect for whale watching", "category": "beach", "search_query": "Mirissa Beach Sri Lanka"},
-    {"name": "Ella Rock", "description": "Scenic hike with breathtaking valley and tea plantation views", "category": "adventure", "search_query": "Ella Rock Sri Lanka"},
-]
-
-_FALLBACK_CULTURE = {
-    "dress_code": "Modest clothing recommended. Cover shoulders and knees if entering temples or sacred spaces.",
-    "behavior_rules": "Avoid public displays of affection. Ask permission before photographing locals, and respect queuing customs.",
-    "best_season": "Generally December to March for West/South coasts; May to September for East coast.",
-    "historical_context": "Sri Lanka has a deep multi-cultural heritage spanning over 2,500 years of recorded history."
-}
-
-_FALLBACK_CULTURE: Dict[str, str] = {
-    "dress_code": "Modest clothing recommended. Cover shoulders and knees if entering temples or sacred spaces.",
-    "behavior_rules": "Avoid public displays of affection. Ask permission before photographing locals, and respect queuing customs.",
-    "best_season": "Generally December to March for West/South coasts; May to September for East coast.",
-    "historical_context": "Sri Lanka has a deep multi-cultural heritage spanning over 2,500 years of recorded history."
-}
-
-_FALLBACK_TRIP_STOPS: List[Dict[str, Any]] = [
-    {
-        "name": "Colombo Fort",
-        "description": "Historic city center with colonial landmarks",
-        "category": "culture",
-        "search_query": "Colombo Fort Sri Lanka",
-        "stop_note": "Start in Colombo for museums and city food trails",
-        "lat": 6.9344, "lng": 79.8468 # Example coordinates
-    },
-    {
-        "name": "Kandy Lake",
-        "description": "Scenic lake near major cultural temples",
-        "category": "culture",
-        "search_query": "Kandy Lake Sri Lanka",
-        "stop_note": "Explore temple district and evening cultural show",
-        "lat": 7.2906, "lng": 80.6337 # Example coordinates
-    },
-    {
-        "name": "Ella Rock",
-        "description": "Panoramic hike above tea-country valleys",
-        "category": "hiking",
-        "search_query": "Ella Rock Sri Lanka",
-        "stop_note": "Sunrise hike and tea estate viewpoints",
-        "lat": 6.8667, "lng": 81.0469 # Example coordinates
-    },
-    {
-        "name": "Yala National Park",
-        "description": "Wildlife safari known for leopards and elephants",
-        "category": "wildlife",
-        "search_query": "Yala National Park Sri Lanka",
-        "stop_note": "Book early-morning jeep safari",
-        "lat": 6.3500, "lng": 81.5000 # Example coordinates
-    },
-    {
-        "name": "Mirissa Beach",
-        "description": "Relaxed beach town with whale watching",
-        "category": "beach",
-        "search_query": "Mirissa Beach Sri Lanka",
-        "stop_note": "End trip with sunset beach time",
-        "lat": 5.9485, "lng": 80.4670 # Example coordinates
-    },
-]
-
+def _score_place(place: Dict[str, Any], interests: List[str], behavior_queue: List[Dict[str, Any]]) -> float:
+    score = 0.0
+    cat = place.get("category", "")
+    if interests and any(cat.lower() == i.lower() for i in interests):
+        score += 3.0
+    if behavior_queue:
+        recent = behavior_queue[-10:]  # type: ignore
+        for act in recent:
+            if act.get("category", "").lower() == cat.lower():
+                score += 1.0
+    score += random.uniform(0.0, 0.5)
+    return score
 
 def _build_prompt(interests: List[str], behavior_queue: List[Dict[str, Any]]) -> str:
     interests_str = ", ".join(interests) if interests else "general sightseeing"
@@ -208,13 +155,17 @@ def get_recommendations(
             print(f"[gemini_service] Gemini error (attempt {attempt + 1}): {err_str[:200]}")  # type: ignore
             # 429 rate limit — wait and retry
             if "429" in err_str and attempt < 2:
-                wait = 15 * (attempt + 1)
-                print(f"[gemini_service] Rate limited — waiting {wait}s before retry")
-                time.sleep(wait)
-                continue
+                print(f"[gemini_service] Rate limited — falling back instantly")
+                break
             break
 
-    return _FALLBACK_PLACES[:5], "fallback"  # type: ignore
+    scored_places = []  # type: ignore
+    for p in FALLBACK_PLACES:
+        s = _score_place(p, interests, behavior_queue)
+        scored_places.append((s, p))
+    scored_places.sort(key=lambda x: x[0], reverse=True)
+    best_5 = [p for s, p in scored_places][:5]  # type: ignore
+    return best_5, "fallback"
 
 
 def get_trip_plan(
@@ -264,32 +215,33 @@ def get_trip_plan(
                         "lng": stop.get("lng"),
                     })
 
-                if len(normalized) < stop_count:
-                    for idx in range(len(normalized) + 1, stop_count + 1):
-                        fallback = _FALLBACK_TRIP_STOPS[(idx - 1) % len(_FALLBACK_TRIP_STOPS)].copy()
-                        fallback["stop_order"] = idx
-                        normalized.append(fallback)
+
 
                 return normalized, "gemini"
         except Exception as e:
             err_str = str(e)
             print(f"[gemini_service] Trip-plan Gemini error (attempt {attempt + 1}): {err_str[:200]}")  # type: ignore
             if "429" in err_str and attempt < 2:
-                time.sleep(15 * (attempt + 1))
-                continue
+                break
             break
 
-    fallback_stops = []
-    for idx in range(stop_count):
-        stop = _FALLBACK_TRIP_STOPS[idx % len(_FALLBACK_TRIP_STOPS)].copy()
-        fallback_stops.append(stop)
+    scored_places = []  # type: ignore
+    for p in FALLBACK_PLACES:
+        s = _score_place(p, profile_interests, behavior_queue)
+        if favorites and any(p.get("name", "").lower() == f.lower() for f in favorites):
+            s += 5.0
+        scored_places.append((s, p.copy()))
 
+    scored_places.sort(key=lambda x: x[0], reverse=True)
+    best_stops = [p for s, p in scored_places][:stop_count]  # type: ignore
+    
     if route_preference == "shortest":
-        fallback_stops = __nearest_neighbor_sort(fallback_stops)
+        best_stops = __nearest_neighbor_sort(best_stops)
     else:
-        for idx, s in enumerate(fallback_stops, start=1):
+        for idx, s in enumerate(best_stops, start=1):
             s["stop_order"] = idx
-    return fallback_stops, "fallback"
+
+    return best_stops, "fallback"
 
 
 def __nearest_neighbor_sort(stops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -365,8 +317,7 @@ Example output: ["Place C", "Place A", "Place B"]
                 return new_stops, "gemini"
         except Exception as e:
             if "429" in str(e) and attempt < 2:
-                time.sleep(15 * (attempt + 1))
-                continue
+                break
             break
 
     # Fallback to local python geometric math if AI quota exhausted globally
@@ -387,7 +338,7 @@ Return ONLY a valid JSON object (no markdown, no extra text) with EXACTLY these 
 }}
 """
     if _model is None:
-        return _FALLBACK_CULTURE, "fallback"
+        return {}, "error"
 
     for attempt in range(3):
         try:
@@ -406,8 +357,7 @@ Return ONLY a valid JSON object (no markdown, no extra text) with EXACTLY these 
             err_str = str(e)
             print(f"[gemini_service] Culture error (attempt {attempt + 1}): {err_str[:200]}")  # type: ignore
             if "429" in err_str and attempt < 2:
-                time.sleep(15 * (attempt + 1))
-                continue
+                break
             break
 
-    return _FALLBACK_CULTURE, "fallback"
+    return {}, "error"
