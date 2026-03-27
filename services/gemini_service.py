@@ -16,6 +16,41 @@ _model = genai.GenerativeModel(
     generation_config={"temperature": 0.9}
 )
 
+def _generate_dynamic_culture_fallback(place_name: str) -> Dict[str, str]:
+    name_lower = place_name.lower()
+    dress_code = "Light, comfortable clothing recommended for the tropical climate. Always cover up if you enter a religious site nearby."
+    behavior = "Sri Lankans are warm and welcoming. Always ask before photographing locals or their property."
+    season = "This area can be visited year-round, though standard dry seasons are Dec-Mar (West/South) and May-Sep (East)."
+    history = f"The area around {place_name} reflects Sri Lanka's rich local culture and diverse heritage."
+    
+    if any(k in name_lower for k in ["beach", "bay", "coast", "point", "surf"]):
+        dress_code = "Swimwear is fine on the beach, but please cover up (t-shirt/sarong) when walking into town or local shops."
+        behavior = "The coastal communities are laid back. Enjoy the relaxed vibe, but keep beaches clean to respect fishing communities."
+        history = f"{place_name} is part of Sri Lanka's beautiful coastline, historically deeply tied to local fishing and maritime trade."
+    elif any(k in name_lower for k in ["temple", "sacred", "stupa", "tooth", "ruin", "fortress", "cave"]):
+        dress_code = "Strict dress code: Shoulders and knees MUST be covered. Remove shoes and hats before entering religious or sacred areas."
+        behavior = "Maintain silence, do not turn your back to Buddha statues when photographing, and respect the devoted locals."
+        history = f"{place_name} holds deep spiritual and historical significance, dating back centuries in Sri Lankan heritage."
+    elif any(k in name_lower for k in ["park", "safari", "wildlife", "elephant", "sanctuary"]):
+        dress_code = "Wear neutral colors (khaki, green, brown) to avoid startling wildlife. Bring a hat and sunglasses."
+        behavior = "Do not feed or provoke the animals. Listen to your safari guide and respect the local park rangers who protect the area."
+        season = "Varies by park, but generally dry seasons are best for spotting animals gathering at the waterholes."
+        history = f"{place_name} is a protected conservation area highlighting Sri Lanka's incredible biodiversity and wildlife."
+    elif any(k in name_lower for k in ["rock", "hike", "peak", "mountain", "ella", "trail"]):
+        dress_code = "Sturdy hiking shoes, breathable activewear, and a light rain jacket in case of mountain mist."
+        behavior = "Stick to marked trails, carry out all your trash, and greet passing locals or tea-pluckers with a friendly 'Ayubowan'."
+        season = "Early morning hikes are best to avoid the midday heat and ensure clear views before afternoon mist rolls in."
+        history = f"The terrain around {place_name} provides some of the most dramatic panoramic geography in the hill country."
+    
+    return {
+        "dress_code": dress_code,
+        "behavior_rules": behavior,
+        "best_season": season,
+        "historical_context": history
+    }
+
+_CULTURE_CACHE: Dict[str, Dict[str, Any]] = {}
+
 def _score_place(place: Dict[str, Any], interests: List[str], behavior_queue: List[Dict[str, Any]]) -> float:
     score = 0.0
     cat = place.get("category", "")
@@ -326,19 +361,22 @@ Example output: ["Place C", "Place A", "Place B"]
 
 def get_place_culture(place_name: str) -> tuple[Dict[str, Any], str]:
     """Generates cultural and local rules for a given place."""
+    if place_name in _CULTURE_CACHE:
+        return _CULTURE_CACHE[place_name], "gemini"
+
     prompt = f"""You are a local Sri Lankan cultural guide.
 Provide brief, highly accurate cultural norms and rules for visiting: '{place_name}'
 
 Return ONLY a valid JSON object (no markdown, no extra text) with EXACTLY these string keys:
 {{
   "dress_code": "Brief advice on what to wear here",
-  "behavior_rules": "1-2 sentences on how to behave, taboos, or local rules",
+  "behavior_rules": "1-2 sentences on how to behave, taboos, local rules, and a description of the local people/community around it",
   "best_season": "The best months to visit this specific area and why",
   "historical_context": "1-2 sentences of interesting background or fun fact"
 }}
 """
     if _model is None:
-        return {}, "error"
+        return _generate_dynamic_culture_fallback(place_name), "fallback"
 
     for attempt in range(3):
         try:
@@ -352,6 +390,7 @@ Return ONLY a valid JSON object (no markdown, no extra text) with EXACTLY these 
 
             data = json.loads(raw)
             if isinstance(data, dict) and "dress_code" in data:
+                _CULTURE_CACHE[place_name] = data
                 return data, "gemini"
         except Exception as e:
             err_str = str(e)
@@ -360,4 +399,4 @@ Return ONLY a valid JSON object (no markdown, no extra text) with EXACTLY these 
                 break
             break
 
-    return {}, "error"
+    return _generate_dynamic_culture_fallback(place_name), "fallback"
